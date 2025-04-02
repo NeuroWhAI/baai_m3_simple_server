@@ -1,11 +1,11 @@
 from FlagEmbedding import BGEM3FlagModel
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import asyncio
 from fastapi import FastAPI, Request, HTTPException, Depends
 from starlette.status import HTTP_504_GATEWAY_TIMEOUT, HTTP_429_TOO_MANY_REQUESTS
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 import time
 import logging
 import os
@@ -43,7 +43,7 @@ class Config:
     # Server settings
     HOST = os.environ.get("HOST", "localhost")
     PORT = int(os.environ.get("PORT", "3000"))
-    WORKERS = int(os.environ.get("WORKERS", "2"))  # Number of worker processes
+    WORKERS = int(os.environ.get("WORKERS", "1"))  # Number of worker processes
     ENABLE_CORS = os.environ.get("ENABLE_CORS", "False").lower() in ("true", "1", "yes")
     
     # Worker threads for the ThreadPoolExecutor
@@ -413,7 +413,7 @@ if __name__ == "__main__":
             logger.info(f"  {key}: {value}")
     
     uvicorn.run(
-        app, 
+        app if Config.WORKERS == 1 else "m3_server:app",
         host=Config.HOST,
         port=Config.PORT,
         workers=Config.WORKERS
