@@ -2,7 +2,7 @@
 
 ✨ This repository is a modification of the original repository to get sparse vectors along with dense vectors.
 
-This server setup uses FastAPI to handle asynchronous requests for text embeddings tasks with the BAAI bge_m3 multilingual model. Designed for demonstration and testing, it showcases efficient request handling, including batching and GPU resource management, in a local environment setting. While not recommended for production, it's robust for testing purposes.
+This server setup uses FastAPI to handle asynchronous requests for embeddings generation with the BAAI bge_m3 multilingual model. Designed for demonstration and testing, it showcases efficient request handling, including batching and GPU resource management, in a local environment setting. While not recommended for production, it's robust for testing purposes.
 
 ## Overview
 
