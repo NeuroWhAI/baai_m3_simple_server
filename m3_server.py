@@ -34,7 +34,7 @@ class Config:
     DEVICE = os.environ.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
     
     # Processing settings
-    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "2"))  # GPU batch size based on VRAM
+    BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "4"))  # GPU batch size based on VRAM
     MAX_LENGTH = int(os.environ.get("MAX_LENGTH", "5000"))  # Max context length for embeddings
     
     # Queue and timeout settings

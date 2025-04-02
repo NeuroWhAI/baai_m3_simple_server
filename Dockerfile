@@ -19,7 +19,7 @@ ENV PYTHONUNBUFFERED=1 \
     ONNX_FILE="model_optimized.onnx" \
     DEVICE="cuda" \
     # Processing settings
-    BATCH_SIZE=2 \
+    BATCH_SIZE=4 \
     MAX_LENGTH=5000 \
     # Queue and timeout settings
     MAX_QUEUE_SIZE=100 \
