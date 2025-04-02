@@ -61,6 +61,22 @@ class M3ModelWrapper:
             logger.error(f"Failed to initialize model: {e}")
             raise
 
+    def warm_up(self, sequence_length=64, num_samples=2):
+        """Warm up the model with dummy requests to initialize cuda kernels."""
+        logger.info(f"Warming up model with {num_samples} dummy samples...")
+        try:
+            dummy_texts = [
+                " ".join(["warm"] * (sequence_length // 5)) for _ in range(num_samples)
+            ]
+            
+            start_time = time.time()
+            _ = self.embed(dummy_texts)
+            
+            warm_up_time = time.time() - start_time
+            logger.info(f"Model warm-up completed in {warm_up_time:.2f}s")
+        except Exception as e:
+            logger.warning(f"Model warm-up failed: {e}")
+
     def embed(self, sentences: List[str]) -> Dict[str, List]:
         """Generate both dense and sparse embeddings for a list of sentences."""
         try:
@@ -298,6 +314,9 @@ async def lifespan(app: FastAPI):
         device=Config.DEVICE,
         use_fp16=Config.USE_FP16
     )
+
+    app.state.model.warm_up()
+
     app.state.processor = RequestProcessor(app.state.model)
     logger.info("Server startup complete")
     
