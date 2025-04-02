@@ -1,0 +1,11 @@
+[project]
+name = "baai_m3_simple_server"
+version = "0.1.0"
+description = "This code sets up a simple yet robust server using FastAPI for handling asynchronous requests for embedding generation and reranking tasks using the BAAI M3 multilingual model."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.12",
+    "flagembedding>=1.3.4",
+    "uvicorn>=0.34.0",
+]
