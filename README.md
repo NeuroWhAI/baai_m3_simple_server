@@ -1,21 +1,23 @@
 # BAAI bge_m3 Multilingual Model Server
 
-This server setup uses FastAPI to handle asynchronous requests for text embeddings and reranking tasks with the BAAI bge_m3 multilingual model. Designed for demonstration and testing, it showcases efficient request handling, including batching and GPU resource management, in a local environment setting. While not recommended for production, it's robust for testing purposes.
+✨ This repository is a modification of the original repository to get sparse vectors along with dense vectors.
+
+This server setup uses FastAPI to handle asynchronous requests for text embeddings tasks with the BAAI bge_m3 multilingual model. Designed for demonstration and testing, it showcases efficient request handling, including batching and GPU resource management, in a local environment setting. While not recommended for production, it's robust for testing purposes.
 
 ## Overview
 
-The script creates an asynchronous web server capable of concurrently processing requests for generating text embeddings and reranking using the BAAI bge_m3 multilingual model. It's structured for demonstration or testing rather than production, integrating advanced AI models with web technologies.
+The script creates an asynchronous web server capable of concurrently processing requests for generating text embeddings(both dense and sparse) using the BAAI bge_m3 multilingual model. It's structured for demonstration or testing rather than production, integrating advanced AI models with web technologies.
 
 ## Key Components
 
 ### AI Model (`AIModel` class)
 
-- **Purpose**: Encapsulates the BAAI bge_m3 multilingual model for embeddings generation (`embed`) and reranking (`rerank`).
-- **Implementation**: Utilizes `BGEM3FlagModel` to process text, generating embeddings and reranking scores efficiently.
+- **Purpose**: Encapsulates the BAAI bge_m3 multilingual model for embeddings generation (`embed`).
+- **Implementation**: Utilizes `BGEM3FlagModel` to process text, generating embeddings efficiently.
 
 ### Request and Response Models
 
-- **Pydantic Models**: Define schemas for incoming requests (`EmbedRequest`, `RerankRequest`) and outgoing responses (`EmbedResponse`, `RerankResponse`), ensuring data integrity.
+- **Pydantic Models**: Define schemas for incoming requests (`EmbedRequest`) and outgoing responses (`EmbedResponse`), ensuring data integrity.
 
 ### Request Processor (`RequestProcessor` class)
 
@@ -25,7 +27,7 @@ The script creates an asynchronous web server capable of concurrently processing
 
 ### FastAPI Server
 
-- **Asynchronous API Routes**: Offers endpoints (`/embeddings/`, `/rerank/`) for asynchronous handling of embedding and reranking tasks, serving multiple clients simultaneously.
+- **Asynchronous API Routes**: Offers endpoints (`/embed/`) for asynchronous handling of embedding, serving multiple clients simultaneously.
 - **Timeout Management Middleware**: Enforces a maximum processing time, responding with a 504 error if exceeded, maintaining server responsiveness.
 
 ## Usage and Limitations
