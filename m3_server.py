@@ -1,4 +1,7 @@
-from FlagEmbedding import BGEM3FlagModel
+from collections import defaultdict
+import numpy as np
+import onnxruntime as ort
+from transformers import AutoTokenizer
 from typing import List, Dict, Any
 import asyncio
 from fastapi import FastAPI, Request, HTTPException, Depends
@@ -25,9 +28,10 @@ logger = logging.getLogger("embedding-service")
 # Configuration - moved to environment variables with sensible defaults
 class Config:
     # Model settings
-    MODEL_NAME = os.environ.get("MODEL_NAME", "BAAI/bge-m3")
+    MODEL_DIR = os.environ.get("MODEL_DIR", "models")
+    MODEL_NAME = os.environ.get("MODEL_NAME", "bge-m3-onnx")
+    ONNX_FILE = os.environ.get("ONNX_FILE", "model.onnx")
     DEVICE = os.environ.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-    USE_FP16 = os.environ.get("USE_FP16", "True").lower() in ("true", "1", "yes") and DEVICE != "cpu"
     
     # Processing settings
     BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "2"))  # GPU batch size based on VRAM
@@ -52,10 +56,31 @@ class Config:
 
 class M3ModelWrapper:
     """Wrapper for the BGEM3FlagModel to handle embedding operations."""
-    def __init__(self, model_name: str, device: str = 'cuda', use_fp16: bool = True):
-        logger.info(f"Initializing model {model_name} on {device} (FP16: {use_fp16})")
+    def __init__(self, model_dir: str, onnx_file: str, device: str = 'cuda'):
+        logger.info(f"Initializing model {model_dir} on {device})")
         try:
-            self.model = BGEM3FlagModel(model_name, device=device, use_fp16=use_fp16)
+            providers = ['CPUExecutionProvider']
+            so = ort.SessionOptions()
+            if device == 'cuda':
+                if 'CUDAExecutionProvider' in ort.get_available_providers():
+                    providers = [('CUDAExecutionProvider', {
+                        'device_id': 0,
+                        'arena_extend_strategy': 'kSameAsRequested',
+                        'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                        'do_copy_in_default_stream': True,
+                    }), 'CPUExecutionProvider']
+
+                    so.enable_mem_pattern = True
+                    so.enable_mem_reuse = True
+                    so.add_session_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")
+                    so.add_session_config_entry('session.use_device_allocator_for_initializers', "1")
+                    so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                else:
+                    logger.warning("CUDAExecutionProvider not available. Using CPUExecutionProvider only.")
+
+            self.ort_session = ort.InferenceSession(os.path.join(model_dir, onnx_file), providers=providers, sess_options=so)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
             logger.info("Model initialization complete")
         except Exception as e:
             logger.error(f"Failed to initialize model: {e}")
@@ -81,19 +106,25 @@ class M3ModelWrapper:
         """Generate both dense and sparse embeddings for a list of sentences."""
         try:
             start_time = time.time()
-            result = self.model.encode(
-                sentences, 
-                batch_size=Config.BATCH_SIZE,
-                max_length=Config.MAX_LENGTH,
-                return_dense=True,
-                return_sparse=True,
-                return_colbert_vecs=False,
-            )
-            
-            # Extract both dense vectors and lexical weights (sparse vectors)
-            dense_vecs = result['dense_vecs'].tolist()
-            lexical_weights = result['lexical_weights']
-            
+
+            dense_vecs = []
+            lexical_weights = []
+
+            for i in range(0, len(sentences), Config.BATCH_SIZE):
+                batch = sentences[i:i+Config.BATCH_SIZE]
+
+                inputs = self.tokenizer(batch, padding="longest", return_tensors="np", truncation=True, max_length=Config.MAX_LENGTH)
+                inputs_onnx = {k: ort.OrtValue.ortvalue_from_numpy(v) for k, v in inputs.items()}
+
+                outputs = self.ort_session.run(None, inputs_onnx)
+
+                dense_vecs.extend(outputs[0].tolist())
+
+                token_weights = outputs[1].squeeze(-1)
+                lexical_weights.extend(
+                    map(self.__process_token_weights, token_weights, inputs["input_ids"].tolist())
+                )
+
             processing_time = time.time() - start_time
             logger.debug(f"Embedding {len(sentences)} sentences took {processing_time:.2f}s")
             
@@ -105,6 +136,25 @@ class M3ModelWrapper:
         except Exception as e:
             logger.error(f"Embedding error: {e}")
             raise
+
+    def __process_token_weights(self, token_weights: np.ndarray, input_ids: list):
+        # conver to dict
+        result = defaultdict(int)
+        unused_tokens = set(
+            [
+                self.tokenizer.cls_token_id,
+                self.tokenizer.eos_token_id,
+                self.tokenizer.pad_token_id,
+                self.tokenizer.unk_token_id,
+            ]
+        )
+        for w, idx in zip(token_weights, input_ids):
+            if idx not in unused_tokens and w > 0:
+                idx = str(idx)
+                # w = int(w)
+                if w > result[idx]:
+                    result[idx] = w
+        return result
 
 
 # --- Pydantic Models ---
@@ -310,9 +360,9 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing model and processor...")
     app.state.model = M3ModelWrapper(
-        model_name=Config.MODEL_NAME,
+        model_dir=os.path.join(Config.MODEL_DIR, Config.MODEL_NAME),
+        onnx_file=Config.ONNX_FILE,
         device=Config.DEVICE,
-        use_fp16=Config.USE_FP16
     )
 
     app.state.model.warm_up()

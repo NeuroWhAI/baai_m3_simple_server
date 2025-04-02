@@ -7,7 +7,7 @@ services:
     ports:
       - 7003:3000
     volumes:
-      - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./models:/app/models
     deploy:
       resources:
         reservations:

@@ -45,3 +45,8 @@ Python >= 3.10 is required!
 ## Conclusion
 
 The server demonstrates a practical approach to NLP tasks using FastAPI and the BAAI bge_m3 multilingual model, focusing on asynchronous processing, batching, and concurrency. It's a robust solution for local environments, with scalability and efficiency in mind. Users are encouraged to adapt and extend it for specific needs and production readiness.
+
+## Models
+
+- [hiauiarau/bge-m3-onnx-O4](https://huggingface.co/hiauiarau/bge-m3-onnx-O4)
+- [aapot/bge-m3-onnx](https://huggingface.co/aapot/bge-m3-onnx)

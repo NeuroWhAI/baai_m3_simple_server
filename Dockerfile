@@ -14,9 +14,10 @@ COPY . /app/
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     # Model settings
-    MODEL_NAME="BAAI/bge-m3" \
+    MODEL_DIR="models" \
+    MODEL_NAME="bge-m3-onnx-o4" \
+    ONNX_FILE="model_optimized.onnx" \
     DEVICE="cuda" \
-    USE_FP16="True" \
     # Processing settings
     BATCH_SIZE=2 \
     MAX_LENGTH=5000 \

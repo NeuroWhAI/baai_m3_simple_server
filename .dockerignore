@@ -1,3 +1,5 @@
+models/
+
 # Ignore Docker-related files
 Dockerfile*
 docker-compose*
