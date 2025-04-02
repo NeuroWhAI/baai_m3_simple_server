@@ -36,9 +36,9 @@ class Config:
     # Queue and timeout settings
     MAX_QUEUE_SIZE = int(os.environ.get("MAX_QUEUE_SIZE", "100"))
     MAX_REQUEST = int(os.environ.get("MAX_REQUEST", "10"))  # Max pending requests
-    REQUEST_FLUSH_TIMEOUT = float(os.environ.get("REQUEST_FLUSH_TIMEOUT", "0.1"))  # Seconds
+    REQUEST_FLUSH_TIMEOUT = float(os.environ.get("REQUEST_FLUSH_TIMEOUT", "0.05"))  # Seconds
     REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "30"))  # Seconds
-    GPU_TIMEOUT = int(os.environ.get("GPU_TIMEOUT", "5"))  # Seconds
+    GPU_TIMEOUT = int(os.environ.get("GPU_TIMEOUT", "60"))  # Seconds
     
     # Server settings
     HOST = os.environ.get("HOST", "localhost")
