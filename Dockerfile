@@ -9,10 +9,17 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY . /app/
+COPY pyproject.toml /app/pyproject.toml
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+RUN pip3 install --no-cache-dir -e .
+
+COPY . /app/
+
+ENV \
     # Model settings
     MODEL_DIR="models" \
     MODEL_NAME="bge-m3-onnx-o4" \
@@ -34,9 +41,6 @@ ENV PYTHONUNBUFFERED=1 \
     ENABLE_CORS="False" \
     # Worker threads for the ThreadPoolExecutor
     WORKER_THREADS=4
-
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
-RUN pip3 install --no-cache-dir -e .
 
 EXPOSE 3000
 
