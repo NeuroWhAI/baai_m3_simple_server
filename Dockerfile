@@ -30,7 +30,7 @@ ENV \
     MAX_LENGTH=5000 \
     # Queue and timeout settings
     MAX_QUEUE_SIZE=100 \
-    MAX_REQUEST=10 \
+    MAX_REQUEST=30 \
     REQUEST_FLUSH_TIMEOUT=0.05 \
     REQUEST_TIMEOUT=30 \
     GPU_TIMEOUT=60 \

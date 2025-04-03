@@ -42,7 +42,7 @@ class Config:
 
     # Queue and timeout settings
     MAX_QUEUE_SIZE = int(os.environ.get("MAX_QUEUE_SIZE", "100"))
-    MAX_REQUEST = int(os.environ.get("MAX_REQUEST", "10"))  # Max pending requests
+    MAX_REQUEST = int(os.environ.get("MAX_REQUEST", "30"))  # Max pending requests
     REQUEST_FLUSH_TIMEOUT = float(
         os.environ.get("REQUEST_FLUSH_TIMEOUT", "0.05")
     )  # Seconds
@@ -247,15 +247,10 @@ class RequestProcessor:
             try:
                 requests, request_ids = [], []
                 start_time = asyncio.get_event_loop().time()
+                timeout = max(0.001, Config.REQUEST_FLUSH_TIMEOUT)
 
                 # Collect requests until batch is full or timeout occurs
                 while len(requests) < Config.MAX_REQUEST:
-                    timeout = Config.REQUEST_FLUSH_TIMEOUT - (
-                        asyncio.get_event_loop().time() - start_time
-                    )
-                    if timeout <= 0:
-                        break
-
                     try:
                         req_data, req_id = await asyncio.wait_for(
                             self.queue.get(), timeout=timeout
@@ -264,6 +259,13 @@ class RequestProcessor:
                         request_ids.append(req_id)
                     except asyncio.TimeoutError:
                         break
+
+                    timeout = Config.REQUEST_FLUSH_TIMEOUT - (
+                        asyncio.get_event_loop().time() - start_time
+                    )
+                    if timeout <= 0:
+                        break
+
 
                 if requests:
                     await self.process_requests(requests, request_ids)
