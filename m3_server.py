@@ -20,66 +20,91 @@ from contextlib import asynccontextmanager
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()],
 )
 logger = logging.getLogger("embedding-service")
 
-# Configuration - moved to environment variables with sensible defaults
+
+# Configuration
 class Config:
     # Model settings
     MODEL_DIR = os.environ.get("MODEL_DIR", "models")
     MODEL_NAME = os.environ.get("MODEL_NAME", "bge-m3-onnx")
     ONNX_FILE = os.environ.get("ONNX_FILE", "model.onnx")
     DEVICE = os.environ.get("DEVICE", "cuda" if torch.cuda.is_available() else "cpu")
-    
+
     # Processing settings
     BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "4"))  # GPU batch size based on VRAM
-    MAX_LENGTH = int(os.environ.get("MAX_LENGTH", "5000"))  # Max context length for embeddings
-    
+    MAX_LENGTH = int(
+        os.environ.get("MAX_LENGTH", "5000")
+    )  # Max context length for embeddings
+
     # Queue and timeout settings
     MAX_QUEUE_SIZE = int(os.environ.get("MAX_QUEUE_SIZE", "100"))
     MAX_REQUEST = int(os.environ.get("MAX_REQUEST", "10"))  # Max pending requests
-    REQUEST_FLUSH_TIMEOUT = float(os.environ.get("REQUEST_FLUSH_TIMEOUT", "0.05"))  # Seconds
+    REQUEST_FLUSH_TIMEOUT = float(
+        os.environ.get("REQUEST_FLUSH_TIMEOUT", "0.05")
+    )  # Seconds
     REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "30"))  # Seconds
     GPU_TIMEOUT = int(os.environ.get("GPU_TIMEOUT", "60"))  # Seconds
-    
+
     # Server settings
     HOST = os.environ.get("HOST", "localhost")
     PORT = int(os.environ.get("PORT", "3000"))
     WORKERS = int(os.environ.get("WORKERS", "1"))  # Number of worker processes
     ENABLE_CORS = os.environ.get("ENABLE_CORS", "False").lower() in ("true", "1", "yes")
-    
+
     # Worker threads for the ThreadPoolExecutor
     WORKER_THREADS = int(os.environ.get("WORKER_THREADS", "4"))
 
 
 class M3ModelWrapper:
     """Wrapper for the BGEM3FlagModel to handle embedding operations."""
-    def __init__(self, model_dir: str, onnx_file: str, device: str = 'cuda'):
+
+    def __init__(self, model_dir: str, onnx_file: str, device: str = "cuda"):
         logger.info(f"Initializing model {model_dir} on {device})")
         try:
-            providers = ['CPUExecutionProvider']
+            self.device = device
+
+            providers = ["CPUExecutionProvider"]
             so = ort.SessionOptions()
-            if device == 'cuda':
-                if 'CUDAExecutionProvider' in ort.get_available_providers():
-                    providers = [('CUDAExecutionProvider', {
-                        'device_id': 0,
-                        'arena_extend_strategy': 'kSameAsRequested',
-                        'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                        'do_copy_in_default_stream': True,
-                    }), 'CPUExecutionProvider']
+            if device == "cuda":
+                if "CUDAExecutionProvider" in ort.get_available_providers():
+                    providers = [
+                        (
+                            "CUDAExecutionProvider",
+                            {
+                                "device_id": 0,
+                                "arena_extend_strategy": "kSameAsRequested",
+                                "cudnn_conv_algo_search": "EXHAUSTIVE",
+                                "do_copy_in_default_stream": True,
+                            },
+                        ),
+                        "CPUExecutionProvider",
+                    ]
 
                     so.enable_mem_pattern = True
                     so.enable_mem_reuse = True
-                    so.add_session_config_entry("memory.enable_memory_arena_shrinkage", "gpu:0")
-                    so.add_session_config_entry('session.use_device_allocator_for_initializers', "1")
+                    so.add_session_config_entry(
+                        "memory.enable_memory_arena_shrinkage", "gpu:0"
+                    )
+                    so.add_session_config_entry(
+                        "session.use_device_allocator_for_initializers", "1"
+                    )
                     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                    so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    so.graph_optimization_level = (
+                        ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                    )
                 else:
-                    logger.warning("CUDAExecutionProvider not available. Using CPUExecutionProvider only.")
+                    logger.warning(
+                        "CUDAExecutionProvider not available. Using CPUExecutionProvider only."
+                    )
+                    self.device = "cpu"
 
-            self.ort_session = ort.InferenceSession(os.path.join(model_dir, onnx_file), providers=providers, sess_options=so)
+            self.ort_session = ort.InferenceSession(
+                os.path.join(model_dir, onnx_file), providers=providers, sess_options=so
+            )
             self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
             logger.info("Model initialization complete")
         except Exception as e:
@@ -93,10 +118,10 @@ class M3ModelWrapper:
             dummy_texts = [
                 " ".join(["warm"] * (sequence_length // 5)) for _ in range(num_samples)
             ]
-            
+
             start_time = time.time()
             _ = self.embed(dummy_texts)
-            
+
             warm_up_time = time.time() - start_time
             logger.info(f"Model warm-up completed in {warm_up_time:.2f}s")
         except Exception as e:
@@ -111,10 +136,18 @@ class M3ModelWrapper:
             lexical_weights = []
 
             for i in range(0, len(sentences), Config.BATCH_SIZE):
-                batch = sentences[i:i+Config.BATCH_SIZE]
+                batch = sentences[i : i + Config.BATCH_SIZE]
 
-                inputs = self.tokenizer(batch, padding="longest", return_tensors="np", truncation=True, max_length=Config.MAX_LENGTH)
-                inputs_onnx = {k: ort.OrtValue.ortvalue_from_numpy(v) for k, v in inputs.items()}
+                inputs = self.tokenizer(
+                    batch,
+                    padding="longest",
+                    return_tensors="np",
+                    truncation=True,
+                    max_length=Config.MAX_LENGTH,
+                )
+                inputs_onnx = {
+                    k: ort.OrtValue.ortvalue_from_numpy(v) for k, v in inputs.items()
+                }
 
                 outputs = self.ort_session.run(None, inputs_onnx)
 
@@ -122,16 +155,22 @@ class M3ModelWrapper:
 
                 token_weights = outputs[1].squeeze(-1)
                 lexical_weights.extend(
-                    map(self.__process_token_weights, token_weights, inputs["input_ids"].tolist())
+                    map(
+                        self.__process_token_weights,
+                        token_weights,
+                        inputs["input_ids"].tolist(),
+                    )
                 )
 
             processing_time = time.time() - start_time
-            logger.debug(f"Embedding {len(sentences)} sentences took {processing_time:.2f}s")
-            
+            logger.debug(
+                f"Embedding {len(sentences)} sentences took {processing_time:.2f}s"
+            )
+
             return {
-                'dense_vecs': dense_vecs,
-                'lexical_weights': lexical_weights,
-                'processing_time': processing_time
+                "dense_vecs": dense_vecs,
+                "lexical_weights": lexical_weights,
+                "processing_time": processing_time,
             }
         except Exception as e:
             logger.error(f"Embedding error: {e}")
@@ -159,7 +198,9 @@ class M3ModelWrapper:
 
 # --- Pydantic Models ---
 class EmbedRequest(BaseModel):
-    sentences: List[str] = Field(..., min_items=1, description="List of sentences to embed")
+    sentences: List[str] = Field(
+        ..., min_items=1, description="List of sentences to embed"
+    )
 
 
 class EmbedResponse(BaseModel):
@@ -179,6 +220,7 @@ class HealthResponse(BaseModel):
 
 class RequestProcessor:
     """Handles queueing and processing of embedding requests."""
+
     def __init__(self, model: M3ModelWrapper):
         self.model = model
         self.queue = asyncio.Queue(maxsize=Config.MAX_QUEUE_SIZE)
@@ -195,7 +237,7 @@ class RequestProcessor:
     async def ensure_processing_loop_started(self):
         """Ensures the request processing loop is running."""
         if not self.processing_loop_started:
-            logger.info('Starting processing loop')
+            logger.info("Starting processing loop")
             self.processing_loop_task = asyncio.create_task(self.processing_loop())
             self.processing_loop_started = True
 
@@ -208,12 +250,16 @@ class RequestProcessor:
 
                 # Collect requests until batch is full or timeout occurs
                 while len(requests) < Config.MAX_REQUEST:
-                    timeout = Config.REQUEST_FLUSH_TIMEOUT - (asyncio.get_event_loop().time() - start_time)
+                    timeout = Config.REQUEST_FLUSH_TIMEOUT - (
+                        asyncio.get_event_loop().time() - start_time
+                    )
                     if timeout <= 0:
                         break
 
                     try:
-                        req_data, req_id = await asyncio.wait_for(self.queue.get(), timeout=timeout)
+                        req_data, req_id = await asyncio.wait_for(
+                            self.queue.get(), timeout=timeout
+                        )
                         requests.append(req_data)
                         request_ids.append(req_id)
                     except asyncio.TimeoutError:
@@ -234,15 +280,17 @@ class RequestProcessor:
             for sentence in req.sentences:
                 all_sentences.append(sentence)
                 indices.append(idx)
-        
+
         # Process the combined batch
-        embed_task = asyncio.create_task(self.run_with_semaphore(
-            self.model.embed, 
-            all_sentences,
-            request_ids,
-            request_sizes=[len(req.sentences) for req in requests]
-        ))
-        
+        embed_task = asyncio.create_task(
+            self.run_with_semaphore(
+                self.model.embed,
+                all_sentences,
+                request_ids,
+                request_sizes=[len(req.sentences) for req in requests],
+            )
+        )
+
         await embed_task
 
     async def run_with_semaphore(self, func, data, request_ids, request_sizes):
@@ -251,25 +299,29 @@ class RequestProcessor:
         async with self.gpu_lock:  # Wait for semaphore
             try:
                 future = self.executor.submit(func, data)
-                result = await asyncio.wait_for(asyncio.wrap_future(future), timeout=Config.GPU_TIMEOUT)
+                result = await asyncio.wait_for(
+                    asyncio.wrap_future(future), timeout=Config.GPU_TIMEOUT
+                )
                 processing_time = time.time() - start_time
-                
+
                 # Split the results according to the original request sizes
                 start_idx = 0
                 for i, size in enumerate(request_sizes):
                     if i < len(request_ids):
                         end_idx = start_idx + size
-                        
+
                         # Extract portions of both dense and lexical vectors
                         partial_result = {
-                            'dense_vecs': result['dense_vecs'][start_idx:end_idx],
-                            'lexical_weights': result['lexical_weights'][start_idx:end_idx] ,
-                            'processing_time': processing_time
+                            "dense_vecs": result["dense_vecs"][start_idx:end_idx],
+                            "lexical_weights": result["lexical_weights"][
+                                start_idx:end_idx
+                            ],
+                            "processing_time": processing_time,
                         }
-                        
+
                         self.response_futures[request_ids[i]].set_result(partial_result)
                         start_idx = end_idx
-                        
+
             except asyncio.TimeoutError:
                 self.error_counter += 1
                 for req_id in request_ids:
@@ -294,33 +346,32 @@ class RequestProcessor:
             if self.active_requests >= Config.MAX_REQUEST:
                 raise HTTPException(
                     status_code=HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Server is currently at maximum capacity. Please try again later."
+                    detail="Server is currently at maximum capacity. Please try again later.",
                 )
-            
+
             # Process the request
             await self.ensure_processing_loop_started()
             request_id = str(uuid4())
             self.response_futures[request_id] = asyncio.Future()
             self.active_requests += 1
             self.request_counter += 1
-            
+
             try:
                 await asyncio.wait_for(
                     self.queue.put((request_data, request_id)),
-                    timeout=1.0  # Timeout for queue put
+                    timeout=1.0,  # Timeout for queue put
                 )
             except asyncio.TimeoutError:
                 self.active_requests -= 1
                 del self.response_futures[request_id]
                 raise HTTPException(
                     status_code=HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Request queue is full. Please try again later."
+                    detail="Request queue is full. Please try again later.",
                 )
-            
+
             try:
                 result = await asyncio.wait_for(
-                    self.response_futures[request_id],
-                    timeout=Config.REQUEST_TIMEOUT
+                    self.response_futures[request_id], timeout=Config.REQUEST_TIMEOUT
                 )
                 del self.response_futures[request_id]
                 return result
@@ -331,15 +382,17 @@ class RequestProcessor:
                     del self.response_futures[request_id]
                 raise HTTPException(
                     status_code=HTTP_504_GATEWAY_TIMEOUT,
-                    detail="Request processing timed out"
+                    detail="Request processing timed out",
                 )
-            
+
         except HTTPException:
             raise
         except Exception as e:
             self.error_counter += 1
             logger.error(f"Request processing error: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Internal Server Error: {str(e)}"
+            )
 
     def get_health_status(self) -> Dict[str, Any]:
         """Get service health information."""
@@ -349,7 +402,7 @@ class RequestProcessor:
             "active_requests": self.active_requests,
             "total_requests": self.request_counter,
             "error_count": self.error_counter,
-            "uptime": time.time() - self.start_time
+            "uptime": time.time() - self.start_time,
         }
 
 
@@ -369,13 +422,13 @@ async def lifespan(app: FastAPI):
 
     app.state.processor = RequestProcessor(app.state.model)
     logger.info("Server startup complete")
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down...")
     # Clean up any resources
-    if hasattr(app.state, 'processor') and app.state.processor.executor:
+    if hasattr(app.state, "processor") and app.state.processor.executor:
         app.state.processor.executor.shutdown(wait=True)
     logger.info("Server shutdown complete")
 
@@ -384,7 +437,7 @@ app = FastAPI(
     title="Embedding Service",
     description="API for text embeddings using BGE-M3 model",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Add CORS middleware if enabled
@@ -402,45 +455,49 @@ if Config.ENABLE_CORS:
 @app.middleware("http")
 async def timeout_and_logging_middleware(request: Request, call_next):
     start_time = time.time()
-    
+
     # Generate request ID for tracking
     request_id = str(uuid4())
     request.state.request_id = request_id
-    
+
     path = request.url.path
     method = request.method
     logger.info(f"Request {request_id}: {method} {path} started")
-    
+
     try:
         response = await asyncio.wait_for(
-            call_next(request), 
-            timeout=Config.REQUEST_TIMEOUT
+            call_next(request), timeout=Config.REQUEST_TIMEOUT
         )
-        
+
         process_time = time.time() - start_time
         response.headers["X-Process-Time"] = str(process_time)
-        logger.info(f"Request {request_id}: {method} {path} completed in {process_time:.3f}s")
-        
+        logger.info(
+            f"Request {request_id}: {method} {path} completed in {process_time:.3f}s"
+        )
+
         return response
-        
+
     except asyncio.TimeoutError:
         process_time = time.time() - start_time
-        logger.warning(f"Request {request_id}: {method} {path} timed out after {process_time:.3f}s")
-        
+        logger.warning(
+            f"Request {request_id}: {method} {path} timed out after {process_time:.3f}s"
+        )
+
         return JSONResponse(
             status_code=HTTP_504_GATEWAY_TIMEOUT,
             content={
                 "detail": "Request processing time exceeded limit",
-                "processing_time": process_time
-            }
+                "processing_time": process_time,
+            },
         )
     except Exception as e:
         process_time = time.time() - start_time
-        logger.error(f"Request {request_id}: {method} {path} failed with error: {str(e)}")
-        
+        logger.error(
+            f"Request {request_id}: {method} {path} failed with error: {str(e)}"
+        )
+
         return JSONResponse(
-            status_code=500,
-            content={"detail": f"Internal server error: {str(e)}"}
+            status_code=500, content={"detail": f"Internal server error: {str(e)}"}
         )
 
 
@@ -459,31 +516,30 @@ async def health_check(processor: RequestProcessor = Depends(get_processor)):
 
 @app.post("/embed/", response_model=EmbedResponse)
 async def get_embeddings(
-    request: EmbedRequest,
-    processor: RequestProcessor = Depends(get_processor)
+    request: EmbedRequest, processor: RequestProcessor = Depends(get_processor)
 ):
     """Generate dense and sparse embeddings for a list of sentences."""
     result = await processor.process_request(request)
     return EmbedResponse(
-        dense_vecs=result['dense_vecs'],
-        lexical_weights=result['lexical_weights'],
-        processing_time=result['processing_time']
+        dense_vecs=result["dense_vecs"],
+        lexical_weights=result["lexical_weights"],
+        processing_time=result["processing_time"],
     )
 
 
 # --- Main entrypoint ---
 if __name__ == "__main__":
     import uvicorn
-    
+
     # Print configuration
     logger.info("Starting server with configuration:")
     for key, value in vars(Config).items():
         if not key.startswith("__"):
             logger.info(f"  {key}: {value}")
-    
+
     uvicorn.run(
         app if Config.WORKERS == 1 else "m3_server:app",
         host=Config.HOST,
         port=Config.PORT,
-        workers=Config.WORKERS
+        workers=Config.WORKERS,
     )
