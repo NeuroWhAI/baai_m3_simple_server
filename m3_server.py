@@ -63,7 +63,7 @@ class Config:
     # Cache settings
     CACHE_MAX_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "10000"))
     CACHE_MAX_TEXT_LENGTH = int(os.environ.get("CACHE_MAX_TEXT_LENGTH", "1000"))
-    CACHE_HIT_COUNTER_SIZE = int(os.environ.get("CACHE_HIT_COUNTER_SIZE", "10"))
+    CACHE_HIT_COUNTER_SIZE = int(os.environ.get("CACHE_HIT_COUNTER_SIZE", "10000"))
     CACHE_HIT_COUNTER_MAX = int(os.environ.get("CACHE_HIT_COUNTER_MAX", "10"))
 
 
