@@ -62,6 +62,9 @@ class Config:
 
     # Cache settings
     CACHE_MAX_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "10000"))
+    CACHE_MAX_TEXT_LENGTH = int(os.environ.get("CACHE_MAX_TEXT_LENGTH", "1000"))
+    CACHE_HIT_COUNTER_SIZE = int(os.environ.get("CACHE_HIT_COUNTER_SIZE", "10"))
+    CACHE_HIT_COUNTER_MAX = int(os.environ.get("CACHE_HIT_COUNTER_MAX", "10"))
 
 
 class M3ModelWrapper:
@@ -243,6 +246,11 @@ class RequestProcessor:
             if Config.CACHE_MAX_SIZE > 0
             else None
         )
+        self.hit_counter_cache = (
+            LRUCache(maxsize=Config.CACHE_HIT_COUNTER_SIZE)
+            if Config.CACHE_HIT_COUNTER_SIZE > 0
+            else None
+        )
         self.cache_lock = threading.Lock()
 
     def _get_cached_embedding(self, sentence: str):
@@ -254,8 +262,19 @@ class RequestProcessor:
     def _set_cached_embedding(self, sentence: str, value):
         if not self.embedding_cache:
             return
+        if len(sentence) > Config.CACHE_MAX_TEXT_LENGTH:
+            return
         with self.cache_lock:
             self.embedding_cache[sentence] = value
+
+    def _record_hit(self, sentence: str) -> int:
+        if not self.hit_counter_cache:
+            return 0
+        with self.cache_lock:
+            count = self.hit_counter_cache.get(sentence, 0)
+            count = min(count + 1, Config.CACHE_HIT_COUNTER_MAX)
+            self.hit_counter_cache[sentence] = count
+            return count
 
     async def ensure_processing_loop_started(self):
         """Ensures the request processing loop is running."""
@@ -311,6 +330,7 @@ class RequestProcessor:
             missing_map = {}
 
             for pos, sentence in enumerate(all_sentences):
+                hit_count = self._record_hit(sentence)
                 cached = self._get_cached_embedding(sentence)
                 if cached:
                     cached_results[pos] = cached
@@ -319,21 +339,25 @@ class RequestProcessor:
                 missing_index = missing_map.get(sentence)
                 if missing_index is None:
                     missing_map[sentence] = len(missing_sentences)
-                    missing_sentences.append(sentence)
+                    missing_sentences.append((sentence, hit_count))
                     missing_positions.append([pos])
                 else:
                     missing_positions[missing_index].append(pos)
 
             processing_time = 0.0
             if missing_sentences:
+                sentences_to_embed = [sentence for sentence, _ in missing_sentences]
                 result = await self.run_with_semaphore(
-                    self.model.embed, missing_sentences
+                    self.model.embed, sentences_to_embed
                 )
                 processing_time = result["processing_time"]
-                for miss_idx, sentence in enumerate(missing_sentences):
+                for miss_idx, (sentence, hit_count) in enumerate(missing_sentences):
                     dense_vec = result["dense_vecs"][miss_idx]
                     lexical_weight = result["lexical_weights"][miss_idx]
-                    self._set_cached_embedding(sentence, (dense_vec, lexical_weight))
+                    if hit_count >= 2:
+                        self._set_cached_embedding(
+                            sentence, (dense_vec, lexical_weight)
+                        )
                     for pos in missing_positions[miss_idx]:
                         cached_results[pos] = (dense_vec, lexical_weight)
 
