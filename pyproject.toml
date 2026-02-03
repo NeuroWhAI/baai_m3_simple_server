@@ -5,6 +5,7 @@ description = "This code sets up a simple yet robust server using FastAPI for ha
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "cachetools==7.0.0",
     "fastapi>=0.115.12",
     "onnxruntime-gpu>=1.21.0",
     "torch>=2.6.0",

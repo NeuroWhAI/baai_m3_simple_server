@@ -1,4 +1,5 @@
 from collections import defaultdict
+from cachetools import LRUCache
 import numpy as np
 import onnxruntime as ort
 from transformers import AutoTokenizer
@@ -16,6 +17,7 @@ from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor
 import torch
 from contextlib import asynccontextmanager
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +59,9 @@ class Config:
 
     # Worker threads for the ThreadPoolExecutor
     WORKER_THREADS = int(os.environ.get("WORKER_THREADS", "4"))
+
+    # Cache settings
+    CACHE_MAX_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "10000"))
 
 
 class M3ModelWrapper:
@@ -233,6 +238,24 @@ class RequestProcessor:
         self.active_requests = 0
         self.request_counter = 0
         self.error_counter = 0
+        self.embedding_cache = (
+            LRUCache(maxsize=Config.CACHE_MAX_SIZE)
+            if Config.CACHE_MAX_SIZE > 0
+            else None
+        )
+        self.cache_lock = threading.Lock()
+
+    def _get_cached_embedding(self, sentence: str):
+        if not self.embedding_cache:
+            return None
+        with self.cache_lock:
+            return self.embedding_cache.get(sentence)
+
+    def _set_cached_embedding(self, sentence: str, value):
+        if not self.embedding_cache:
+            return
+        with self.cache_lock:
+            self.embedding_cache[sentence] = value
 
     async def ensure_processing_loop_started(self):
         """Ensures the request processing loop is running."""
@@ -277,26 +300,79 @@ class RequestProcessor:
         """Process batched embedding requests."""
         # Combine all sentences into a single batch
         all_sentences = []
-        indices = []
-        for idx, req in enumerate(requests):
-            for sentence in req.sentences:
-                all_sentences.append(sentence)
-                indices.append(idx)
+        for req in requests:
+            all_sentences.extend(req.sentences)
+        request_sizes = [len(req.sentences) for req in requests]
 
-        # Process the combined batch
-        embed_task = asyncio.create_task(
-            self.run_with_semaphore(
-                self.model.embed,
-                all_sentences,
-                request_ids,
-                request_sizes=[len(req.sentences) for req in requests],
-            )
-        )
+        try:
+            cached_results = [None] * len(all_sentences)
+            missing_sentences = []
+            missing_positions = []
+            missing_map = {}
 
-        await embed_task
+            for pos, sentence in enumerate(all_sentences):
+                cached = self._get_cached_embedding(sentence)
+                if cached:
+                    cached_results[pos] = cached
+                    continue
 
-    async def run_with_semaphore(self, func, data, request_ids, request_sizes):
-        """Run a function with GPU lock and handle results."""
+                missing_index = missing_map.get(sentence)
+                if missing_index is None:
+                    missing_map[sentence] = len(missing_sentences)
+                    missing_sentences.append(sentence)
+                    missing_positions.append([pos])
+                else:
+                    missing_positions[missing_index].append(pos)
+
+            processing_time = 0.0
+            if missing_sentences:
+                result = await self.run_with_semaphore(
+                    self.model.embed, missing_sentences
+                )
+                processing_time = result["processing_time"]
+                for miss_idx, sentence in enumerate(missing_sentences):
+                    dense_vec = result["dense_vecs"][miss_idx]
+                    lexical_weight = result["lexical_weights"][miss_idx]
+                    self._set_cached_embedding(sentence, (dense_vec, lexical_weight))
+                    for pos in missing_positions[miss_idx]:
+                        cached_results[pos] = (dense_vec, lexical_weight)
+
+            start_idx = 0
+            for i, size in enumerate(request_sizes):
+                if i < len(request_ids):
+                    end_idx = start_idx + size
+                    dense_vecs = [
+                        cached_results[j][0] for j in range(start_idx, end_idx)
+                    ]
+                    lexical_weights = [
+                        cached_results[j][1] for j in range(start_idx, end_idx)
+                    ]
+                    partial_result = {
+                        "dense_vecs": dense_vecs,
+                        "lexical_weights": lexical_weights,
+                        "processing_time": processing_time,
+                    }
+                    self.response_futures[request_ids[i]].set_result(partial_result)
+                    start_idx = end_idx
+        except asyncio.TimeoutError:
+            self.error_counter += 1
+            for req_id in request_ids:
+                if req_id in self.response_futures:
+                    self.response_futures[req_id].set_exception(
+                        TimeoutError("GPU processing timeout")
+                    )
+        except Exception as e:
+            self.error_counter += 1
+            logger.error(f"Processing error: {e}")
+            for req_id in request_ids:
+                if req_id in self.response_futures:
+                    self.response_futures[req_id].set_exception(e)
+        finally:
+            for _ in request_ids:
+                self.active_requests -= 1
+
+    async def run_with_semaphore(self, func, data):
+        """Run a function with GPU lock and return results."""
         start_time = time.time()
         async with self.gpu_lock:  # Wait for semaphore
             try:
@@ -305,41 +381,12 @@ class RequestProcessor:
                     asyncio.wrap_future(future), timeout=Config.GPU_TIMEOUT
                 )
                 processing_time = time.time() - start_time
-
-                # Split the results according to the original request sizes
-                start_idx = 0
-                for i, size in enumerate(request_sizes):
-                    if i < len(request_ids):
-                        end_idx = start_idx + size
-
-                        # Extract portions of both dense and lexical vectors
-                        partial_result = {
-                            "dense_vecs": result["dense_vecs"][start_idx:end_idx],
-                            "lexical_weights": result["lexical_weights"][
-                                start_idx:end_idx
-                            ],
-                            "processing_time": processing_time,
-                        }
-
-                        self.response_futures[request_ids[i]].set_result(partial_result)
-                        start_idx = end_idx
-
+                result["processing_time"] = processing_time
+                return result
             except asyncio.TimeoutError:
-                self.error_counter += 1
-                for req_id in request_ids:
-                    if req_id in self.response_futures:
-                        self.response_futures[req_id].set_exception(
-                            TimeoutError("GPU processing timeout")
-                        )
+                raise
             except Exception as e:
-                self.error_counter += 1
-                logger.error(f"Processing error: {e}")
-                for req_id in request_ids:
-                    if req_id in self.response_futures:
-                        self.response_futures[req_id].set_exception(e)
-            finally:
-                for req_id in request_ids:
-                    self.active_requests -= 1
+                raise e
 
     async def process_request(self, request_data: EmbedRequest):
         """Queue a request for processing and await the result."""
